@@ -1,0 +1,15 @@
+{
+    "dataset_records": 10000,
+    "lstm_metrics": {
+        "lstm_mape_pct": 0.6644237494317502,
+        "lstm_rmse_cm": 0.63351856062364,
+        "lstm_mae_cm": 0.48499357390620956
+    },
+    "autoencoder_metrics": {
+        "anomaly_threshold_mse": 0.7816559580916647,
+        "anomaly_recall_pct": 100.0,
+        "normal_mean_mse": 0.05821674153333072,
+        "anomaly_mean_mse": 27.272963559996224
+    },
+    "model_status": "TRAINED_AND_VALIDATED"
+}

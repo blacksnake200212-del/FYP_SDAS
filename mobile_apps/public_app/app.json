@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "Puttalam Dam Alert (SDAS)",
+    "slug": "fypsdas",
+    "owner": "vibecodes-team",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#0F294A"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "lk.sltc.sdas.public"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0F294A"
+      },
+      "package": "lk.sltc.sdas.public"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "97e74605-f1b7-40cf-9e9a-1681307937e8"
+      }
+    }
+  }
+}
