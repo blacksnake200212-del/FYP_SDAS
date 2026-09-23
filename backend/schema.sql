@@ -10,7 +10,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- 1. SYSTEM CONFIGURATION & CALIBRATION TABLE
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.system_config (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     reservoir_name VARCHAR(100) NOT NULL DEFAULT 'Puttalam Deduru Oya Reservoir Node 1',
     sensor_height_cm NUMERIC(6, 2) NOT NULL DEFAULT 100.00,
     max_water_level_cm NUMERIC(6, 2) NOT NULL DEFAULT 85.00,
@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS public.system_config (
 -- 2. SENSOR TELEMETRY READINGS TABLE
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.sensor_readings (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     water_level_cm NUMERIC(6, 2) NOT NULL,
     capacity_pct NUMERIC(5, 2) NOT NULL,
@@ -55,7 +55,7 @@ CREATE INDEX IF NOT EXISTS idx_sensor_readings_state ON public.sensor_readings (
 -- 3. GATE ACTUATION AUDIT LOGS TABLE
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.gate_logs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     previous_angle INT NOT NULL,
     new_angle INT NOT NULL,
@@ -72,7 +72,7 @@ CREATE INDEX IF NOT EXISTS idx_gate_logs_created_at ON public.gate_logs (created
 -- 4. ALARMS & EMERGENCY NOTIFICATIONS TABLE
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.alarms (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     stage VARCHAR(30) NOT NULL, -- 'PRE_WARNING', 'CLEAR_AREA', 'DANGER', 'SENSOR_FAULT'
     water_level_cm NUMERIC(6, 2) NOT NULL,
@@ -90,7 +90,7 @@ CREATE INDEX IF NOT EXISTS idx_alarms_created_at ON public.alarms (created_at DE
 -- 5. EMERGENCY CONTACTS DIRECTORY
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.emergency_contacts (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(100) NOT NULL,
     phone_number VARCHAR(25) NOT NULL,
     role VARCHAR(50) NOT NULL, -- 'OPERATOR', 'DISASTER_OFFICE', 'POLICE', 'COMMUNITY_REP'
