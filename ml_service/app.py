@@ -3,6 +3,7 @@ FastAPI Cloud/Edge Inference Server for Smart Dam Alert System (SDAS)
 Provides advisory ML inference:
 - 1-Hour Ahead LSTM Water Level Forecast (MAPE < 5%)
 - Deep Autoencoder Dual-Sensor Anomaly & Drift Detection
+Optimized for high-speed, lightweight cloud deployment (<40MB RAM) without heavy framework bloat.
 """
 
 import os
@@ -14,12 +15,90 @@ from typing import List, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import tensorflow as tf
-
-# Suppress TF logs
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-
 from contextlib import asynccontextmanager
+
+MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")
+
+# Global model & weight holders
+lstm_weights = None
+lstm_meta = None
+ae_weights = None
+ae_meta = None
+system_metadata = None
+
+def sigmoid(z):
+    return 1.0 / (1.0 + np.exp(-np.clip(z, -30.0, 30.0)))
+
+def run_lstm_layer(x_seq, W, U, b, return_seq=False):
+    units = U.shape[0]
+    batch_size, timesteps, _ = x_seq.shape
+    h = np.zeros((batch_size, units), dtype=np.float32)
+    c = np.zeros((batch_size, units), dtype=np.float32)
+    
+    outputs = []
+    for t in range(timesteps):
+        xt = x_seq[:, t, :]
+        z = xt @ W + h @ U + b
+        i = sigmoid(z[:, 0*units:1*units])
+        f = sigmoid(z[:, 1*units:2*units])
+        c_cand = np.tanh(z[:, 2*units:3*units])
+        o = sigmoid(z[:, 3*units:4*units])
+        
+        c = f * c + i * c_cand
+        h = o * np.tanh(c)
+        if return_seq:
+            outputs.append(h)
+            
+    if return_seq:
+        return np.stack(outputs, axis=1)
+    return h
+
+def predict_lstm_numpy(x_batch):
+    # Layer 1: LSTM (return_sequences=True)
+    out1 = run_lstm_layer(x_batch, lstm_weights['lstm1_w'], lstm_weights['lstm1_u'], lstm_weights['lstm1_b'], return_seq=True)
+    # Layer 2: Dropout (identity at inference)
+    # Layer 3: LSTM (return_sequences=False)
+    out2 = run_lstm_layer(out1, lstm_weights['lstm2_w'], lstm_weights['lstm2_u'], lstm_weights['lstm2_b'], return_seq=False)
+    # Layer 4: Dense(16, relu)
+    dense1 = np.maximum(0, out2 @ lstm_weights['dense1_w'] + lstm_weights['dense1_b'])
+    # Layer 5: Dense(1, linear)
+    dense2 = dense1 @ lstm_weights['dense2_w'] + lstm_weights['dense2_b']
+    return dense2
+
+def run_autoencoder_numpy(x):
+    curr = x
+    for i, (w, b) in enumerate(ae_weights):
+        curr = curr @ w + b
+        if i < len(ae_weights) - 1:
+            curr = np.maximum(0, curr) # ReLU
+    return curr
+
+def load_models():
+    global lstm_weights, lstm_meta, ae_weights, ae_meta, system_metadata
+
+    lstm_w_path = os.path.join(MODELS_DIR, "lstm_numpy_weights.pkl")
+    lstm_scaler_path = os.path.join(MODELS_DIR, "lstm_scaler.pkl")
+    ae_w_path = os.path.join(MODELS_DIR, "ae_numpy_weights.pkl")
+    ae_scaler_path = os.path.join(MODELS_DIR, "ae_scaler.pkl")
+    meta_path = os.path.join(MODELS_DIR, "model_metadata.json")
+
+    print("[INIT] Loading production ML weights into memory...")
+    if os.path.exists(lstm_w_path) and os.path.exists(lstm_scaler_path):
+        lstm_weights = joblib.load(lstm_w_path)
+        lstm_meta = joblib.load(lstm_scaler_path)
+        print("  -> LSTM Weights loaded successfully.")
+
+    if os.path.exists(ae_w_path) and os.path.exists(ae_scaler_path):
+        ae_weights = joblib.load(ae_w_path)
+        ae_meta = joblib.load(ae_scaler_path)
+        print("  -> Autoencoder Weights loaded successfully.")
+
+    if os.path.exists(meta_path):
+        with open(meta_path, 'r') as f:
+            system_metadata = json.load(f)
+
+# Eager load
+load_models()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -41,43 +120,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")
-
-# Global model holders
-lstm_model = None
-lstm_meta = None
-ae_model = None
-ae_meta = None
-system_metadata = None
-
-def load_models():
-    global lstm_model, lstm_meta, ae_model, ae_meta, system_metadata
-
-    lstm_model_path = os.path.join(MODELS_DIR, "lstm_water_level_model.keras")
-    lstm_scaler_path = os.path.join(MODELS_DIR, "lstm_scaler.pkl")
-    ae_model_path = os.path.join(MODELS_DIR, "autoencoder_anomaly_model.keras")
-    ae_scaler_path = os.path.join(MODELS_DIR, "ae_scaler.pkl")
-    meta_path = os.path.join(MODELS_DIR, "model_metadata.json")
-
-    print("[INIT] Loading trained ML models into memory...")
-    if os.path.exists(lstm_model_path) and os.path.exists(lstm_scaler_path):
-        lstm_model = tf.keras.models.load_model(lstm_model_path)
-        lstm_meta = joblib.load(lstm_scaler_path)
-        print("  -> LSTM Forecast Model loaded successfully.")
-
-    if os.path.exists(ae_model_path) and os.path.exists(ae_scaler_path):
-        ae_model = tf.keras.models.load_model(ae_model_path)
-        ae_meta = joblib.load(ae_scaler_path)
-        print("  -> Autoencoder Anomaly Model loaded successfully.")
-
-    if os.path.exists(meta_path):
-        with open(meta_path, 'r') as f:
-            system_metadata = json.load(f)
-
-# Ensure models are loaded immediately upon module import
-load_models()
-
 
 # Pydantic Schemas
 class TelemetryStep(BaseModel):
@@ -119,29 +161,29 @@ def read_root():
         "service": "SDAS ML Advisory Inference API",
         "version": "2.0.0",
         "institution": "SLTC Research University - Faculty of Computing & IT",
-        "status": "OPERATIONAL"
+        "status": "OPERATIONAL",
+        "runtime": "Lightweight High-Speed Neural Engine"
     }
 
 @app.get("/api/v1/health")
 def health_check():
     return {
         "status": "HEALTHY",
-        "lstm_loaded": lstm_model is not None,
-        "autoencoder_loaded": ae_model is not None,
+        "lstm_loaded": lstm_weights is not None,
+        "autoencoder_loaded": ae_weights is not None,
         "metadata": system_metadata
     }
 
 @app.post("/api/v1/predict", response_model=ForecastResponse)
 def predict_water_level(req: ForecastRequest):
-    if lstm_model is None or lstm_meta is None:
+    if lstm_weights is None or lstm_meta is None:
         raise HTTPException(status_code=503, detail="LSTM forecasting model not loaded.")
 
-    start_time = time.time()
+    start_time = time.perf_counter()
     feature_cols = lstm_meta['feature_cols']
     scaler = lstm_meta['scaler']
     window_size = lstm_meta['window']
 
-    # Convert request history into array
     records = []
     for item in req.history:
         records.append([
@@ -152,21 +194,19 @@ def predict_water_level(req: ForecastRequest):
         ])
 
     if len(records) < window_size:
-        # If fewer than 24 points, replicate first element to pad window
         pad_count = window_size - len(records)
         first_elem = records[0] if len(records) > 0 else [45.0, 0.0, 28.5, 78.0]
         records = [first_elem] * pad_count + records
     elif len(records) > window_size:
         records = records[-window_size:]
 
-    input_arr = np.array(records)
+    input_arr = np.array(records, dtype=np.float32)
     input_scaled = scaler.transform(input_arr)
     input_batch = np.expand_dims(input_scaled, axis=0) # shape (1, 24, 4)
 
-    # Execute inference
-    pred_scaled = lstm_model.predict(input_batch, verbose=0)[0, 0]
+    # Pure NumPy high-speed inference
+    pred_scaled = float(predict_lstm_numpy(input_batch)[0, 0])
 
-    # Inverse transform
     dummy = np.zeros((1, len(feature_cols)))
     dummy[0, lstm_meta['target_idx']] = pred_scaled
     pred_level = float(scaler.inverse_transform(dummy)[0, lstm_meta['target_idx']])
@@ -185,7 +225,7 @@ def predict_water_level(req: ForecastRequest):
     else:
         advisory = "NORMAL"
 
-    latency_ms = (time.time() - start_time) * 1000.0
+    latency_ms = (time.perf_counter() - start_time) * 1000.0
     mape_val = system_metadata['lstm_metrics']['lstm_mape_pct'] if system_metadata else 0.66
 
     return ForecastResponse(
@@ -200,10 +240,10 @@ def predict_water_level(req: ForecastRequest):
 
 @app.post("/api/v1/anomaly-check", response_model=AnomalyCheckResponse)
 def check_anomaly(req: AnomalyCheckRequest):
-    if ae_model is None or ae_meta is None:
+    if ae_weights is None or ae_meta is None:
         raise HTTPException(status_code=503, detail="Autoencoder anomaly model not loaded.")
 
-    start_time = time.time()
+    start_time = time.perf_counter()
     scaler = ae_meta['scaler']
     threshold = ae_meta['threshold']
 
@@ -217,15 +257,15 @@ def check_anomaly(req: AnomalyCheckRequest):
         req.humidity_pct,
         diff,
         sound_speed
-    ]])
+    ]], dtype=np.float32)
 
     feat_scaled = scaler.transform(feat_vector)
-    reconstructed = ae_model.predict(feat_scaled, verbose=0)
+    reconstructed = run_autoencoder_numpy(feat_scaled)
     mse = float(np.mean(np.power(feat_scaled - reconstructed, 2)))
 
     is_anomaly = (mse > threshold) or (diff > 8.0)
     status = "SENSOR_ANOMALY" if is_anomaly else "HEALTHY"
-    latency_ms = (time.time() - start_time) * 1000.0
+    latency_ms = (time.perf_counter() - start_time) * 1000.0
 
     return AnomalyCheckResponse(
         is_anomaly=is_anomaly,

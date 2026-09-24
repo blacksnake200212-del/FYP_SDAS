@@ -8,6 +8,4 @@ services:
     plan: free
     envVars:
       - key: PYTHON_VERSION
-        value: 3.12.0
-      - key: TF_ENABLE_ONEDNN_OPTS
-        value: "0"
+        value: 3.11.9
