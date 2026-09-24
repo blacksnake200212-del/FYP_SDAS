@@ -8,6 +8,18 @@
 
 ---
 
+## 🌐 Live Cloud Deployments & Mobile Builds
+
+| Service / App | Platform | Status | URL / Artifact |
+|---|---|---|---|
+| **Render ML Microservice** | Render Cloud (Python 3.11) | 🟢 Live (HTTP 200) | [`https://fyp-sdas.onrender.com`](https://fyp-sdas.onrender.com) ([Swagger Docs](https://fyp-sdas.onrender.com/docs)) |
+| **Supabase Cloud DB & RLS** | Supabase PostgreSQL | 🟢 Active | [`https://ekozmubrolqmtshmjkcw.supabase.co`](https://ekozmubrolqmtshmjkcw.supabase.co) |
+| **Public Dam Alert App** | Android Preview (APK) | 🟢 Built & Ready | [📥 Direct Download (.apk)](https://expo.dev/artifacts/eas/B2P3AU3xWbEWi70wudPLDyuodKQcWqDlsDjrO3L6_ro.apk) · [EAS Page](https://expo.dev/accounts/vibecodes-team/projects/fypsdas/builds/bae73095-3ef8-431a-88b9-e0e9e43b001e) |
+| **Operator Portal App** | Android Preview (APK) | 🟡 Compiling on EAS | [EAS Project Dashboard](https://expo.dev/accounts/vibecodes-team/projects/fypsdas-operator) |
+| **GitHub Repository** | GitHub | 🟢 Synced | [`blacksnake200212-del/FYP_SDAS`](https://github.com/blacksnake200212-del/FYP_SDAS.git) |
+
+---
+
 ## 📌 Project Architecture Overview
 
 ```
