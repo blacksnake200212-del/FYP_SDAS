@@ -20,6 +20,13 @@ ios/
 *.log
 *build_log*.txt
 
+# Hardware & PlatformIO
+.pio/
+secrets.h
+private/
+data/
+*.db*
+
 # OS & Editors
 .DS_Store
 Thumbs.db

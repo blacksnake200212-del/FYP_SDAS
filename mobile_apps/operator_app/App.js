@@ -10,15 +10,19 @@ import {
   TextInput,
   Modal,
   Alert,
-  Switch,
   Dimensions,
   ActivityIndicator
 } from 'react-native';
 import { SUPABASE_CONFIG } from './src/config/supabase';
+import { TRANSLATIONS } from './src/translations';
 
 const { width } = Dimensions.get('window');
 
 export default function App() {
+  // Language State: 'en', 'si', 'ta'
+  const [lang, setLang] = useState('en');
+  const t = TRANSLATIONS[lang] || TRANSLATIONS.en;
+
   // Authentication State
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [operatorId, setOperatorId] = useState('ENG-PUTTALAM-04');
@@ -49,8 +53,23 @@ export default function App() {
   // Manual Gate Override State
   const [targetOverrideAngle, setTargetOverrideAngle] = useState(27);
   const [overrideModalVisible, setOverrideModalVisible] = useState(false);
+
+  // SMS Dispatch State & Dynamic Registered Recipient Directory
   const [smsModalVisible, setSmsModalVisible] = useState(false);
   const [smsStageSelected, setSmsStageSelected] = useState('PRE_WARNING');
+  const [addContactModalVisible, setAddContactModalVisible] = useState(false);
+
+  // Registered Contacts List (Only these will receive broadcasts)
+  const [contacts, setContacts] = useState([
+    { id: '1', name: 'Eng. K. A. Perera', phone_number: '+94 77 123 4567', role: 'Chief Dam Engineer' },
+    { id: '2', name: 'Puttalam Disaster Center (DMC Desk)', phone_number: '+94 32 226 5243', role: 'DMC Operations' },
+    { id: '3', name: 'Chilaw HQ Police Emergency', phone_number: '+94 32 222 2222', role: 'Police Command' }
+  ]);
+
+  // Add Contact Form State
+  const [newContactName, setNewContactName] = useState('');
+  const [newContactPhone, setNewContactPhone] = useState('');
+  const [newContactRole, setNewContactRole] = useState('');
 
   // Audit Logs
   const [auditLogs, setAuditLogs] = useState([
@@ -84,6 +103,7 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
+  // Manual Gate Override Handlers
   const handleApplyOverride = () => {
     setOverrideModalVisible(false);
     const newPct = parseFloat(((targetOverrideAngle / 90) * 100).toFixed(1));
@@ -98,29 +118,34 @@ export default function App() {
       {
         id: Date.now().toString(),
         time: new Date().toLocaleTimeString(),
-        action: 'MANUAL_OVERRIDE_APPLIED',
-        details: `Operator set gate to ${targetOverrideAngle}° (${newPct}% aperture). Automated hysteresis bypassed.`,
-        trigger: 'OPERATOR_OVERRIDE'
+        action: 'MANUAL_GATE_OVERRIDE',
+        details: `Gate aperture manually set to ${targetOverrideAngle}° (${newPct}%) by ${operatorId}.`,
+        trigger: 'MANUAL_OVERRIDE'
       },
       ...prev
     ]);
 
-    Alert.alert('Override Dispatched', `Command sent to ESP32: Gate positioning to ${targetOverrideAngle}° (${newPct}%)`);
+    Alert.alert(
+      'Manual Override Active',
+      `MG996R gate target commanded to ${targetOverrideAngle}° (${newPct}% aperture).`
+    );
   };
 
   const handleReleaseOverride = () => {
     setTelemetry(prev => ({
       ...prev,
-      is_manual_override: false
+      is_manual_override: false,
+      current_gate_angle: 27,
+      current_gate_pct: 30.0
     }));
 
     setAuditLogs(prev => [
       {
         id: Date.now().toString(),
         time: new Date().toLocaleTimeString(),
-        action: 'OVERRIDE_RELEASED',
-        details: 'Manual override cancelled. Reverted to Autonomous 3% Hysteresis state machine.',
-        trigger: 'OPERATOR'
+        action: 'RELEASE_OVERRIDE',
+        details: `Manual override released by ${operatorId}. System returned to autonomous 3% hysteresis state machine.`,
+        trigger: 'MANUAL_RELEASE'
       },
       ...prev
     ]);
@@ -128,21 +153,112 @@ export default function App() {
     Alert.alert('Autonomous Mode Restored', 'Gate returned to automated 3% hysteresis state machine.');
   };
 
+  // Add Contact Handler
+  const handleAddContact = () => {
+    const trimmedName = newContactName.trim();
+    const trimmedPhone = newContactPhone.trim();
+    const trimmedRole = newContactRole.trim() || 'Responder';
+
+    if (!trimmedName || !trimmedPhone) {
+      Alert.alert('Required Information', 'Please provide both the contact name and phone number.');
+      return;
+    }
+
+    // Basic format check
+    if (trimmedPhone.length < 9) {
+      Alert.alert('Invalid Number', 'Please enter a valid phone number (e.g. +94 77 123 4567).');
+      return;
+    }
+
+    const newContact = {
+      id: Date.now().toString(),
+      name: trimmedName,
+      phone_number: trimmedPhone,
+      role: trimmedRole
+    };
+
+    setContacts(prev => [newContact, ...prev]);
+    setNewContactName('');
+    setNewContactPhone('');
+    setNewContactRole('');
+    setAddContactModalVisible(false);
+
+    setAuditLogs(prev => [
+      {
+        id: Date.now().toString(),
+        time: new Date().toLocaleTimeString(),
+        action: 'RECIPIENT_ADDED',
+        details: `Added SMS recipient: ${trimmedName} (${trimmedPhone}, ${trimmedRole}) by ${operatorId}.`,
+        trigger: 'DIRECTORY_MANAGEMENT'
+      },
+      ...prev
+    ]);
+
+    Alert.alert('Recipient Registered', `Emergency broadcasts will now be transmitted to ${trimmedPhone} (${trimmedName}).`);
+  };
+
+  // Remove Contact Handler
+  const handleRemoveContact = (id, name, phone) => {
+    Alert.alert(
+      t.smsDispatch.confirmRemoveTitle,
+      `${t.smsDispatch.confirmRemoveMsg}\n\n• ${name}: ${phone}`,
+      [
+        { text: t.smsDispatch.cancelBtn, style: 'cancel' },
+        {
+          text: t.smsDispatch.confirmRemoveBtn,
+          style: 'destructive',
+          onPress: () => {
+            setContacts(prev => prev.filter(c => c.id !== id));
+            setAuditLogs(prevLog => [
+              {
+                id: Date.now().toString(),
+                time: new Date().toLocaleTimeString(),
+                action: 'RECIPIENT_REMOVED',
+                details: `Removed recipient ${name} (${phone}) from emergency directory by ${operatorId}.`,
+                trigger: 'DIRECTORY_MANAGEMENT'
+              },
+              ...prevLog
+            ]);
+            Alert.alert('Removed', `${phone} removed from emergency broadcast directory.`);
+          }
+        }
+      ]
+    );
+  };
+
+  // Emergency SMS Broadcast Handler (Sends ONLY to registered numbers)
   const handleDispatchSMS = () => {
     setSmsModalVisible(false);
+
+    if (contacts.length === 0) {
+      Alert.alert(
+        'No Recipients Registered',
+        'Cannot dispatch broadcast: there are no authorized phone numbers in the directory. Please add at least one recipient.'
+      );
+      return;
+    }
+
+    const recipientList = contacts.map(c => `${c.name} (${c.phone_number})`).join('\n• ');
+    const phoneNumbers = contacts.map(c => c.phone_number).join(', ');
+
     setAuditLogs(prev => [
       {
         id: Date.now().toString(),
         time: new Date().toLocaleTimeString(),
         action: `SMS_BROADCAST_${smsStageSelected}`,
-        details: `Dispatched ${smsStageSelected} SMS to 3 registered contacts via SIM800L module.`,
+        details: `Dispatched ${smsStageSelected} SMS via SIM800L to ${contacts.length} verified numbers: ${phoneNumbers}.`,
         trigger: 'OPERATOR_DISPATCH'
       },
       ...prev
     ]);
-    Alert.alert('Emergency SMS Sent', `Broadcasted ${smsStageSelected} alert to DMC, Police, and Community Dispatch.`);
+
+    Alert.alert(
+      'Emergency SMS Broadcast Transmitted',
+      `Stage: ${smsStageSelected}\n\nDispatched exclusively to ${contacts.length} registered recipient(s):\n• ${recipientList}`
+    );
   };
 
+  // Supabase Authentication
   const handleSupabaseLogin = async () => {
     if (!email || !password) {
       Alert.alert('Missing Fields', 'Please enter both Operator Email and Password.');
@@ -210,13 +326,37 @@ export default function App() {
     }
   };
 
+  // LOGIN SCREEN
   if (!isAuthenticated) {
     return (
       <SafeAreaView style={styles.loginContainer}>
         <StatusBar barStyle="light-content" backgroundColor="#0F294A" />
+
+        {/* Language selector on login screen */}
+        <View style={styles.loginLangRow}>
+          <TouchableOpacity
+            style={[styles.langPill, lang === 'en' && styles.langPillActive]}
+            onPress={() => setLang('en')}
+          >
+            <Text style={[styles.langText, lang === 'en' && styles.langTextActive]}>EN</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.langPill, lang === 'si' && styles.langPillActive]}
+            onPress={() => setLang('si')}
+          >
+            <Text style={[styles.langText, lang === 'si' && styles.langTextActive]}>සිං</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.langPill, lang === 'ta' && styles.langPillActive]}
+            onPress={() => setLang('ta')}
+          >
+            <Text style={[styles.langText, lang === 'ta' && styles.langTextActive]}>த</Text>
+          </TouchableOpacity>
+        </View>
+
         <View style={styles.loginCard}>
-          <Text style={styles.loginHeader}>SDAS Operator Portal</Text>
-          <Text style={styles.loginSub}>Puttalam Dam Spillway Management</Text>
+          <Text style={styles.loginHeader}>{t.appTitle}</Text>
+          <Text style={styles.loginSub}>{t.appSubtitle}</Text>
 
           <Text style={styles.inputLabel}>Operator Email</Text>
           <TextInput
@@ -275,16 +415,42 @@ export default function App() {
     );
   }
 
+  // MAIN OPERATOR DASHBOARD
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#0F294A" />
 
       {/* Top Header */}
       <View style={styles.header}>
-        <View>
-          <Text style={styles.headerTitle}>SDAS Operator Console</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.headerTitle}>{t.appTitle}</Text>
           <Text style={styles.headerSubtitle}>Logged in: {operatorId}</Text>
         </View>
+
+        {/* Trilingual Toggle */}
+        <View style={styles.langContainer}>
+          <TouchableOpacity
+            style={[styles.langPill, lang === 'en' && styles.langPillActive]}
+            onPress={() => setLang('en')}
+          >
+            <Text style={[styles.langText, lang === 'en' && styles.langTextActive]}>EN</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.langPill, lang === 'si' && styles.langPillActive]}
+            onPress={() => setLang('si')}
+          >
+            <Text style={[styles.langText, lang === 'si' && styles.langTextActive]}>සිං</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.langPill, lang === 'ta' && styles.langPillActive]}
+            onPress={() => setLang('ta')}
+          >
+            <Text style={[styles.langText, lang === 'ta' && styles.langTextActive]}>த</Text>
+          </TouchableOpacity>
+        </View>
+
         <TouchableOpacity style={styles.logoutButton} onPress={() => setIsAuthenticated(false)}>
           <Text style={styles.logoutText}>Lock</Text>
         </TouchableOpacity>
@@ -296,28 +462,36 @@ export default function App() {
           style={[styles.tabButton, activeTab === 'TELEMETRY' && styles.tabButtonActive]}
           onPress={() => setActiveTab('TELEMETRY')}
         >
-          <Text style={[styles.tabText, activeTab === 'TELEMETRY' && styles.tabTextActive]}>Telemetry</Text>
+          <Text style={[styles.tabText, activeTab === 'TELEMETRY' && styles.tabTextActive]}>
+            {t.tabs.telemetry}
+          </Text>
         </TouchableOpacity>
 
         <TouchableOpacity
           style={[styles.tabButton, activeTab === 'GATE_CONTROL' && styles.tabButtonActive]}
           onPress={() => setActiveTab('GATE_CONTROL')}
         >
-          <Text style={[styles.tabText, activeTab === 'GATE_CONTROL' && styles.tabTextActive]}>Gate Control</Text>
+          <Text style={[styles.tabText, activeTab === 'GATE_CONTROL' && styles.tabTextActive]}>
+            {t.tabs.gateControl}
+          </Text>
         </TouchableOpacity>
 
         <TouchableOpacity
           style={[styles.tabButton, activeTab === 'SMS_DISPATCH' && styles.tabButtonActive]}
           onPress={() => setActiveTab('SMS_DISPATCH')}
         >
-          <Text style={[styles.tabText, activeTab === 'SMS_DISPATCH' && styles.tabTextActive]}>SMS Dispatch</Text>
+          <Text style={[styles.tabText, activeTab === 'SMS_DISPATCH' && styles.tabTextActive]}>
+            {t.tabs.smsDispatch}
+          </Text>
         </TouchableOpacity>
 
         <TouchableOpacity
           style={[styles.tabButton, activeTab === 'AUDIT_LOGS' && styles.tabButtonActive]}
           onPress={() => setActiveTab('AUDIT_LOGS')}
         >
-          <Text style={[styles.tabText, activeTab === 'AUDIT_LOGS' && styles.tabTextActive]}>Audit Log</Text>
+          <Text style={[styles.tabText, activeTab === 'AUDIT_LOGS' && styles.tabTextActive]}>
+            {t.tabs.auditLogs}
+          </Text>
         </TouchableOpacity>
       </View>
 
@@ -328,191 +502,167 @@ export default function App() {
             {/* System Status Banner */}
             <View style={styles.card}>
               <View style={styles.cardHeaderRow}>
-                <Text style={styles.cardTitle}>Real-Time Reservoir Telemetry</Text>
+                <Text style={styles.cardTitle}>{t.status.systemState}</Text>
                 <View style={[styles.statusBadge, { backgroundColor: telemetry.is_manual_override ? '#DC2626' : '#2563EB' }]}>
                   <Text style={styles.statusBadgeText}>
-                    {telemetry.is_manual_override ? 'MANUAL OVERRIDE' : 'AUTO HYSTERESIS'}
+                    {telemetry.is_manual_override ? t.status.manualActive : t.status.autoActive}
                   </Text>
                 </View>
               </View>
 
               <View style={styles.largeMetricRow}>
                 <View>
-                  <Text style={styles.metricSubTitle}>Storage Capacity</Text>
+                  <Text style={styles.metricSubTitle}>{t.telemetry.reservoirCapacity}</Text>
                   <Text style={styles.hugeMetric}>{telemetry.capacity_pct}%</Text>
                   <Text style={styles.metricHelper}>{telemetry.water_level_cm} cm of 85.0 cm</Text>
                 </View>
                 <View>
-                  <Text style={styles.metricSubTitle}>Gate Position</Text>
+                  <Text style={styles.metricSubTitle}>{t.status.gateAperture}</Text>
                   <Text style={styles.hugeMetric}>{telemetry.current_gate_angle}°</Text>
                   <Text style={styles.metricHelper}>{telemetry.current_gate_pct}% Open (MG996R)</Text>
                 </View>
               </View>
             </View>
 
-            {/* Dual Sensor Comparison Card */}
+            {/* Dual Sensor Comparison */}
             <View style={styles.card}>
-              <Text style={styles.cardTitle}>Dual JSN-SR04T Sensor Fusion</Text>
-              <Text style={styles.bodyText}>Dual waterproof transducers sampled via ML2029 logic level converter:</Text>
+              <Text style={styles.cardTitle}>Dual Ultrasonic Verification</Text>
+              <Text style={styles.bodyText}>Redundant acoustic sensing with real-time discrepancy monitoring:</Text>
 
-              <View style={styles.sensorGrid}>
+              <View style={styles.sensorRow}>
                 <View style={styles.sensorBox}>
-                  <Text style={styles.sensorLabel}>Sensor 1 (GPIO 5/19)</Text>
-                  <Text style={styles.sensorVal}>{telemetry.sensor_1_cm} cm</Text>
-                  <Text style={styles.sensorStatus}>Online (Valid)</Text>
+                  <Text style={styles.sensorLabel}>{t.telemetry.sensor1}</Text>
+                  <Text style={styles.sensorValue}>{telemetry.sensor_1_cm} cm</Text>
                 </View>
-
                 <View style={styles.sensorBox}>
-                  <Text style={styles.sensorLabel}>Sensor 2 (GPIO 18/21)</Text>
-                  <Text style={styles.sensorVal}>{telemetry.sensor_2_cm} cm</Text>
-                  <Text style={styles.sensorStatus}>Online (Valid)</Text>
+                  <Text style={styles.sensorLabel}>{t.telemetry.sensor2}</Text>
+                  <Text style={styles.sensorValue}>{telemetry.sensor_2_cm} cm</Text>
                 </View>
               </View>
 
-              <View style={styles.infoRow}>
-                <Text style={styles.infoLabel}>Transducer Discrepancy:</Text>
-                <Text style={[styles.infoValue, { color: telemetry.sensor_discrepancy_cm > 8 ? '#EF4444' : '#10B981' }]}>
-                  {telemetry.sensor_discrepancy_cm} cm (Max allowed: 8.0 cm)
+              <View style={styles.discrepancyBox}>
+                <Text style={styles.discrepancyLabel}>{t.status.discrepancy}:</Text>
+                <Text style={[styles.discrepancyValue, { color: telemetry.sensor_discrepancy_cm > 2.0 ? '#DC2626' : '#16A34A' }]}>
+                  {telemetry.sensor_discrepancy_cm} cm {telemetry.sensor_discrepancy_cm <= 2.0 ? '✓ (Synchronized)' : '⚠️ (High Error)'}
                 </Text>
               </View>
 
-              <View style={styles.infoRow}>
-                <Text style={styles.infoLabel}>Acoustic Sound Velocity:</Text>
-                <Text style={styles.infoValue}>{telemetry.sound_speed_mps} m/s (DHT22 Calibrated)</Text>
-              </View>
-
-              <View style={styles.infoRow}>
-                <Text style={styles.infoLabel}>Ambient Environment:</Text>
-                <Text style={styles.infoValue}>{telemetry.temperature_c}°C | {telemetry.humidity_pct}% RH</Text>
+              <View style={styles.metricRow}>
+                <Text style={styles.metricLabel}>{t.status.autoencoderMse}:</Text>
+                <Text style={styles.metricValueText}>{telemetry.autoencoder_mse} (Threshold: {telemetry.autoencoder_threshold})</Text>
               </View>
             </View>
 
-            {/* AI Autoencoder Diagnostics */}
+            {/* Environmental Compensation */}
             <View style={styles.card}>
-              <View style={styles.cardHeaderRow}>
-                <Text style={styles.cardTitle}>Deep Autoencoder Health Diagnostics</Text>
-                <View style={styles.healthyBadge}>
-                  <Text style={styles.healthyBadgeText}>{telemetry.sensor_health}</Text>
+              <Text style={styles.cardTitle}>Acoustic Environmental Compensation</Text>
+              <View style={styles.envGrid}>
+                <View style={styles.envItem}>
+                  <Text style={styles.envLabel}>{t.telemetry.temperature}</Text>
+                  <Text style={styles.envValue}>{telemetry.temperature_c}°C</Text>
                 </View>
-              </View>
-              <Text style={styles.bodyText}>
-                Unsupervised neural reconstruction error (MSE) evaluated by cloud FastAPI server:
-              </Text>
-              <View style={styles.progressBarTrack}>
-                <View
-                  style={[
-                    styles.progressBarFill,
-                    {
-                      width: `${Math.min(100, (telemetry.autoencoder_mse / telemetry.autoencoder_threshold) * 100)}%`,
-                      backgroundColor: '#10B981'
-                    }
-                  ]}
-                />
-              </View>
-              <View style={styles.thresholdRow}>
-                <Text style={styles.thresholdLabel}>Current MSE: {telemetry.autoencoder_mse}</Text>
-                <Text style={styles.thresholdLabel}>Anomaly Threshold: {telemetry.autoencoder_threshold}</Text>
+                <View style={styles.envItem}>
+                  <Text style={styles.envLabel}>{t.telemetry.humidity}</Text>
+                  <Text style={styles.envValue}>{telemetry.humidity_pct}%</Text>
+                </View>
+                <View style={styles.envItem}>
+                  <Text style={styles.envLabel}>{t.telemetry.soundSpeed}</Text>
+                  <Text style={styles.envValue}>{telemetry.sound_speed_mps} m/s</Text>
+                </View>
               </View>
             </View>
           </View>
         )}
 
-        {/* TAB 2: MANUAL GATE OVERRIDE CONTROLLER */}
+        {/* TAB 2: MANUAL GATE CONTROL */}
         {activeTab === 'GATE_CONTROL' && (
           <View>
             <View style={styles.card}>
-              <Text style={styles.cardTitle}>Spillway Gate Actuator Control (MG996R)</Text>
-              <Text style={styles.bodyText}>
-                Certified operators can override the local 3% hysteresis state machine to clear debris, perform maintenance, or initiate emergency retention.
-              </Text>
+              <Text style={styles.cardTitle}>{t.gateControl.title}</Text>
+              <Text style={styles.bodyText}>{t.gateControl.subtitle}</Text>
 
-              {/* Mode Status Indicator */}
-              <View style={[styles.overrideBanner, { backgroundColor: telemetry.is_manual_override ? '#FEF2F2' : '#F0FDF4' }]}>
-                <Text style={[styles.overrideBannerTitle, { color: telemetry.is_manual_override ? '#DC2626' : '#16A34A' }]}>
-                  {telemetry.is_manual_override ? '⚠️ MANUAL OVERRIDE ENGAGED' : '✅ AUTONOMOUS HYSTERESIS ACTIVE'}
-                </Text>
-                <Text style={styles.overrideBannerDesc}>
-                  {telemetry.is_manual_override
-                    ? 'Automated threshold actions are locked out. Operator holds absolute control.'
-                    : 'ESP32 is regulating gate aperture based on water capacity and 3% hysteresis window.'}
-                </Text>
+              <View style={styles.currentPositionBox}>
+                <Text style={styles.currentPositionLabel}>{t.gateControl.currentAperture}:</Text>
+                <Text style={styles.currentPositionValue}>{telemetry.current_gate_angle}° ({telemetry.current_gate_pct}%)</Text>
               </View>
 
-              {/* Current Angle Display */}
-              <View style={styles.angleDisplayBox}>
-                <Text style={styles.angleSub}>Target Position</Text>
-                <Text style={styles.angleNumber}>{targetOverrideAngle}°</Text>
-                <Text style={styles.anglePct}>Aperture: {((targetOverrideAngle / 90) * 100).toFixed(0)}% Open</Text>
-              </View>
-
-              {/* Preset Buttons */}
-              <Text style={styles.presetLabel}>Select Staged Preset Angle:</Text>
+              <Text style={styles.controlSectionHeader}>{t.gateControl.targetAngle}:</Text>
               <View style={styles.presetRow}>
+                {[0, 27, 54, 90].map(angle => (
+                  <TouchableOpacity
+                    key={angle}
+                    style={[styles.presetBtn, targetOverrideAngle === angle && styles.presetBtnActive]}
+                    onPress={() => setTargetOverrideAngle(angle)}
+                  >
+                    <Text style={[styles.presetBtnText, targetOverrideAngle === angle && styles.presetBtnTextActive]}>
+                      {angle === 0 ? t.gateControl.closed0 : angle === 27 ? t.gateControl.stage27 : angle === 54 ? t.gateControl.stage54 : t.gateControl.full90}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={styles.sliderLabel}>Fine Tuning: {targetOverrideAngle}°</Text>
+              <View style={styles.stepperRow}>
                 <TouchableOpacity
-                  style={[styles.presetBtn, targetOverrideAngle === 0 && styles.presetBtnActive]}
-                  onPress={() => setTargetOverrideAngle(0)}
+                  style={styles.stepperBtn}
+                  onPress={() => setTargetOverrideAngle(prev => Math.max(0, prev - 5))}
                 >
-                  <Text style={[styles.presetBtnText, targetOverrideAngle === 0 && styles.presetBtnTextActive]}>0° (Closed)</Text>
+                  <Text style={styles.stepperBtnText}>- 5°</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={[styles.presetBtn, targetOverrideAngle === 27 && styles.presetBtnActive]}
-                  onPress={() => setTargetOverrideAngle(27)}
-                >
-                  <Text style={[styles.presetBtnText, targetOverrideAngle === 27 && styles.presetBtnTextActive]}>27° (30%)</Text>
-                </TouchableOpacity>
+                <View style={styles.angleDisplayBox}>
+                  <Text style={styles.angleDisplayText}>{targetOverrideAngle}°</Text>
+                </View>
 
                 <TouchableOpacity
-                  style={[styles.presetBtn, targetOverrideAngle === 54 && styles.presetBtnActive]}
-                  onPress={() => setTargetOverrideAngle(54)}
+                  style={styles.stepperBtn}
+                  onPress={() => setTargetOverrideAngle(prev => Math.min(90, prev + 5))}
                 >
-                  <Text style={[styles.presetBtnText, targetOverrideAngle === 54 && styles.presetBtnTextActive]}>54° (60%)</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[styles.presetBtn, targetOverrideAngle === 90 && styles.presetBtnActive]}
-                  onPress={() => setTargetOverrideAngle(90)}
-                >
-                  <Text style={[styles.presetBtnText, targetOverrideAngle === 90 && styles.presetBtnTextActive]}>90° (100%)</Text>
+                  <Text style={styles.stepperBtnText}>+ 5°</Text>
                 </TouchableOpacity>
               </View>
 
-              {/* Action Buttons */}
               <TouchableOpacity
-                style={styles.overrideExecuteButton}
+                style={styles.applyBtn}
                 onPress={() => setOverrideModalVisible(true)}
               >
-                <Text style={styles.overrideExecuteText}>Dispatch Manual Override Command</Text>
+                <Text style={styles.applyBtnText}>{t.gateControl.applyOverride}</Text>
               </TouchableOpacity>
 
               {telemetry.is_manual_override && (
                 <TouchableOpacity
-                  style={styles.releaseButton}
+                  style={styles.releaseBtn}
                   onPress={handleReleaseOverride}
                 >
-                  <Text style={styles.releaseButtonText}>Release Override (Return to Auto)</Text>
+                  <Text style={styles.releaseBtnText}>{t.gateControl.releaseOverride}</Text>
                 </TouchableOpacity>
               )}
+
+              <Text style={styles.miniWarning}>{t.gateControl.warningText}</Text>
             </View>
           </View>
         )}
 
-        {/* TAB 3: EMERGENCY SMS DISPATCH */}
+        {/* TAB 3: EMERGENCY SMS DISPATCH & RECIPIENT MANAGEMENT */}
         {activeTab === 'SMS_DISPATCH' && (
           <View>
+            {/* Critical Security Notice */}
+            <View style={styles.noticeCard}>
+              <Text style={styles.noticeCardText}>{t.smsDispatch.criticalNotice}</Text>
+            </View>
+
+            {/* Broadcast Triggers Card */}
             <View style={styles.card}>
-              <Text style={styles.cardTitle}>SIM800L Cellular Broadcast Station</Text>
-              <Text style={styles.bodyText}>
-                Transmit prioritized SMS alerts through the on-board SIM800L GSM transceiver to civil protection hotlines:
-              </Text>
+              <Text style={styles.cardTitle}>{t.smsDispatch.title}</Text>
+              <Text style={styles.bodyText}>{t.smsDispatch.subtitle}</Text>
 
               <TouchableOpacity
                 style={[styles.smsStageBtn, { borderColor: '#F59E0B' }]}
                 onPress={() => { setSmsStageSelected('PRE_WARNING'); setSmsModalVisible(true); }}
               >
                 <View>
-                  <Text style={[styles.smsStageTitle, { color: '#D97706' }]}>1. Broadcast PRE-WARNING SMS</Text>
-                  <Text style={styles.smsStageSub}>Notifies local irrigation staff and DMC of approaching 70% threshold.</Text>
+                  <Text style={[styles.smsStageTitle, { color: '#D97706' }]}>{t.smsDispatch.stage1Btn}</Text>
+                  <Text style={styles.smsStageSub}>{t.smsDispatch.stage1Sub}</Text>
                 </View>
               </TouchableOpacity>
 
@@ -521,8 +671,8 @@ export default function App() {
                 onPress={() => { setSmsStageSelected('CLEAR_AREA'); setSmsModalVisible(true); }}
               >
                 <View>
-                  <Text style={[styles.smsStageTitle, { color: '#EA580C' }]}>2. Broadcast CLEAR AREA SMS</Text>
-                  <Text style={styles.smsStageSub}>Orders immediate evacuation of downstream river channels.</Text>
+                  <Text style={[styles.smsStageTitle, { color: '#EA580C' }]}>{t.smsDispatch.stage2Btn}</Text>
+                  <Text style={styles.smsStageSub}>{t.smsDispatch.stage2Sub}</Text>
                 </View>
               </TouchableOpacity>
 
@@ -531,18 +681,57 @@ export default function App() {
                 onPress={() => { setSmsStageSelected('DANGER'); setSmsModalVisible(true); }}
               >
                 <View>
-                  <Text style={[styles.smsStageTitle, { color: '#DC2626' }]}>3. Broadcast EMERGENCY DANGER SMS</Text>
-                  <Text style={styles.smsStageSub}>Alerts Police, Disaster Center, and civil authorities of 100% spillway discharge.</Text>
+                  <Text style={[styles.smsStageTitle, { color: '#DC2626' }]}>{t.smsDispatch.stage3Btn}</Text>
+                  <Text style={styles.smsStageSub}>{t.smsDispatch.stage3Sub}</Text>
                 </View>
               </TouchableOpacity>
             </View>
 
-            {/* Recipient Directory */}
+            {/* Recipient Management Directory */}
             <View style={styles.card}>
-              <Text style={styles.cardTitle}>Registered Recipient Directory</Text>
-              <Text style={styles.bulletItem}>• Chief Dam Engineer: +94 77 123 4567 (Active)</Text>
-              <Text style={styles.bulletItem}>• Puttalam Disaster Center: +94 32 226 5243 (Active)</Text>
-              <Text style={styles.bulletItem}>• Chilaw HQ Police Dispatch: +94 32 222 2222 (Active)</Text>
+              <View style={styles.cardHeaderRow}>
+                <View>
+                  <Text style={styles.cardTitle}>{t.smsDispatch.directoryTitle}</Text>
+                  <Text style={styles.directoryCountText}>
+                    {t.smsDispatch.registeredCount}: {contacts.length}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.addContactBtn}
+                  onPress={() => setAddContactModalVisible(true)}
+                >
+                  <Text style={styles.addContactBtnText}>+ {t.smsDispatch.addBtn}</Text>
+                </TouchableOpacity>
+              </View>
+
+              {contacts.length === 0 ? (
+                <View style={styles.emptyContactsBox}>
+                  <Text style={styles.emptyContactsText}>
+                    No recipients registered. Please add phone numbers below so emergency alerts can be dispatched.
+                  </Text>
+                </View>
+              ) : (
+                contacts.map(c => (
+                  <View key={c.id} style={styles.contactItemCard}>
+                    <View style={{ flex: 1 }}>
+                      <View style={styles.contactHeaderRow}>
+                        <Text style={styles.contactName}>{c.name}</Text>
+                        <View style={styles.roleBadge}>
+                          <Text style={styles.roleBadgeText}>{c.role}</Text>
+                        </View>
+                      </View>
+                      <Text style={styles.contactPhone}>📱 {c.phone_number}</Text>
+                    </View>
+
+                    <TouchableOpacity
+                      style={styles.removeContactBtn}
+                      onPress={() => handleRemoveContact(c.id, c.name, c.phone_number)}
+                    >
+                      <Text style={styles.removeContactBtnText}>{t.smsDispatch.removeBtn}</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))
+              )}
             </View>
           </View>
         )}
@@ -551,8 +740,8 @@ export default function App() {
         {activeTab === 'AUDIT_LOGS' && (
           <View>
             <View style={styles.card}>
-              <Text style={styles.cardTitle}>System Gate & Safety Audit Trail</Text>
-              <Text style={styles.bodyText}>Immutable chronological record of gate actuations and telemetry events:</Text>
+              <Text style={styles.cardTitle}>{t.audit.title}</Text>
+              <Text style={styles.bodyText}>{t.audit.subtitle}</Text>
 
               {auditLogs.map(log => (
                 <View key={log.id} style={styles.logItem}>
@@ -561,7 +750,7 @@ export default function App() {
                     <Text style={styles.logTime}>{log.time}</Text>
                   </View>
                   <Text style={styles.logDetails}>{log.details}</Text>
-                  <Text style={styles.logTrigger}>Trigger Source: {log.trigger}</Text>
+                  <Text style={styles.logTrigger}>Source: {log.trigger}</Text>
                 </View>
               ))}
             </View>
@@ -569,7 +758,59 @@ export default function App() {
         )}
       </ScrollView>
 
-      {/* Override Confirmation Modal */}
+      {/* ADD RECIPIENT MODAL */}
+      <Modal visible={addContactModalVisible} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>{t.smsDispatch.addRecipientTitle}</Text>
+            <Text style={styles.bodyText}>
+              Broadcast SMS alerts will be transmitted exclusively to this recipient:
+            </Text>
+
+            <Text style={styles.inputLabel}>Full Name / Official Role</Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder={t.smsDispatch.namePlaceholder}
+              value={newContactName}
+              onChangeText={setNewContactName}
+            />
+
+            <Text style={styles.inputLabel}>Phone Number</Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder={t.smsDispatch.phonePlaceholder}
+              keyboardType="phone-pad"
+              value={newContactPhone}
+              onChangeText={setNewContactPhone}
+            />
+
+            <Text style={styles.inputLabel}>Department / Role</Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder={t.smsDispatch.rolePlaceholder}
+              value={newContactRole}
+              onChangeText={setNewContactRole}
+            />
+
+            <View style={styles.modalBtnRow}>
+              <TouchableOpacity
+                style={styles.modalCancelBtn}
+                onPress={() => setAddContactModalVisible(false)}
+              >
+                <Text style={styles.modalCancelText}>{t.smsDispatch.cancelBtn}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.modalConfirmBtn}
+                onPress={handleAddContact}
+              >
+                <Text style={styles.modalConfirmText}>{t.smsDispatch.addBtn}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* OVERRIDE CONFIRMATION MODAL */}
       <Modal visible={overrideModalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -593,21 +834,48 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* SMS Confirmation Modal */}
+      {/* SMS BROADCAST CONFIRMATION MODAL */}
       <Modal visible={smsModalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Confirm Emergency SMS Broadcast</Text>
+            <Text style={styles.modalTitle}>{t.smsDispatch.confirmBroadcastTitle}</Text>
             <Text style={styles.modalText}>
-              Broadcast {smsStageSelected} text alert to all registered Puttalam disaster responders via SIM800L module?
+              Stage: <Text style={{ fontWeight: 'bold', color: '#DC2626' }}>{smsStageSelected}</Text>
             </Text>
+
+            <Text style={styles.recipientIntroText}>
+              {t.smsDispatch.confirmBroadcastIntro}
+            </Text>
+
+            {/* Recipient list preview in modal */}
+            <ScrollView style={styles.modalRecipientList}>
+              {contacts.length === 0 ? (
+                <Text style={styles.emptyContactsText}>⚠️ No registered numbers! Please add recipients first.</Text>
+              ) : (
+                contacts.map(c => (
+                  <View key={c.id} style={styles.modalRecipientItem}>
+                    <Text style={styles.modalRecipientBullet}>✓</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.modalRecipientName}>{c.name} ({c.role})</Text>
+                      <Text style={styles.modalRecipientPhone}>{c.phone_number}</Text>
+                    </View>
+                  </View>
+                ))
+              )}
+            </ScrollView>
+
+            <Text style={styles.modalWarning}>{t.smsDispatch.confirmBroadcastWarning}</Text>
 
             <View style={styles.modalBtnRow}>
               <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setSmsModalVisible(false)}>
-                <Text style={styles.modalCancelText}>Cancel</Text>
+                <Text style={styles.modalCancelText}>{t.smsDispatch.cancelBtn}</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.modalConfirmBtn} onPress={handleDispatchSMS}>
-                <Text style={styles.modalConfirmText}>Broadcast SMS</Text>
+              <TouchableOpacity
+                style={[styles.modalConfirmBtn, contacts.length === 0 && { opacity: 0.5 }]}
+                disabled={contacts.length === 0}
+                onPress={handleDispatchSMS}
+              >
+                <Text style={styles.modalConfirmText}>{t.smsDispatch.confirmSendBtn}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -629,6 +897,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 20
   },
+  loginLangRow: {
+    flexDirection: 'row',
+    backgroundColor: '#1E3A8A',
+    borderRadius: 8,
+    padding: 4,
+    marginBottom: 16
+  },
   loginCard: {
     width: '100%',
     backgroundColor: '#FFFFFF',
@@ -637,7 +912,7 @@ const styles = StyleSheet.create({
     elevation: 4
   },
   loginHeader: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: 'bold',
     color: '#0F294A',
     marginBottom: 4,
@@ -649,36 +924,50 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     textAlign: 'center'
   },
-  input: {
-    backgroundColor: '#F8FAFC',
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 14,
-    marginBottom: 14
-  },
-  primaryButton: {
-    backgroundColor: '#1E3A8A',
-    paddingVertical: 14,
-    borderRadius: 8,
-    alignItems: 'center'
-  },
-  primaryButtonText: {
-    color: '#FFFFFF',
-    fontWeight: 'bold',
-    fontSize: 14
-  },
   inputLabel: {
     fontSize: 12,
     fontWeight: '600',
     color: '#334155',
     marginBottom: 6
   },
+  input: {
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: '#0F294A',
+    marginBottom: 14
+  },
+  modalInput: {
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 13,
+    color: '#0F294A',
+    marginBottom: 10
+  },
+  primaryButton: {
+    backgroundColor: '#1E3A8A',
+    paddingVertical: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginTop: 6
+  },
+  primaryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: 'bold'
+  },
   divider: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginVertical: 14
+    marginVertical: 16
   },
   dividerLine: {
     flex: 1,
@@ -686,13 +975,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#E2E8F0'
   },
   dividerText: {
-    marginHorizontal: 10,
-    fontSize: 11,
+    marginHorizontal: 12,
     color: '#94A3B8',
+    fontSize: 12,
     fontWeight: 'bold'
   },
   secondaryButton: {
-    backgroundColor: '#F8FAFC',
+    backgroundColor: '#F1F5F9',
     borderWidth: 1,
     borderColor: '#CBD5E1',
     paddingVertical: 12,
@@ -700,39 +989,39 @@ const styles = StyleSheet.create({
     alignItems: 'center'
   },
   secondaryButtonText: {
-    color: '#1E293B',
-    fontWeight: 'bold',
-    fontSize: 13
+    color: '#0F294A',
+    fontSize: 13,
+    fontWeight: 'bold'
   },
   credentialHintBox: {
     marginTop: 16,
     backgroundColor: '#EFF6FF',
-    borderWidth: 1,
-    borderColor: '#BFDBFE',
+    padding: 10,
     borderRadius: 8,
-    padding: 10
+    borderWidth: 1,
+    borderColor: '#BFDBFE'
   },
   hintTitle: {
     fontSize: 11,
     fontWeight: 'bold',
-    color: '#1E40AF',
+    color: '#1E3A8A',
     marginBottom: 2
   },
   hintText: {
     fontSize: 11,
-    color: '#1E3A8A'
+    color: '#3B82F6'
   },
   header: {
     backgroundColor: '#0F294A',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center'
+    alignItems: 'center',
+    justifyContent: 'space-between'
   },
   headerTitle: {
     color: '#FFFFFF',
-    fontSize: 18,
+    fontSize: 15,
     fontWeight: 'bold'
   },
   headerSubtitle: {
@@ -740,16 +1029,39 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 2
   },
+  langContainer: {
+    flexDirection: 'row',
+    backgroundColor: '#1E3A8A',
+    borderRadius: 8,
+    padding: 2,
+    marginHorizontal: 8
+  },
+  langPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6
+  },
+  langPillActive: {
+    backgroundColor: '#3B82F6'
+  },
+  langText: {
+    color: '#93C5FD',
+    fontSize: 11,
+    fontWeight: 'bold'
+  },
+  langTextActive: {
+    color: '#FFFFFF'
+  },
   logoutButton: {
     backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 6
   },
   logoutText: {
     color: '#FFFFFF',
     fontSize: 11,
-    fontWeight: '600'
+    fontWeight: 'bold'
   },
   tabBar: {
     flexDirection: 'row',
@@ -778,12 +1090,29 @@ const styles = StyleSheet.create({
   contentContainer: {
     padding: 16
   },
+  noticeCard: {
+    backgroundColor: '#FEF3C7',
+    borderLeftWidth: 4,
+    borderLeftColor: '#F59E0B',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 14
+  },
+  noticeCardText: {
+    color: '#92400E',
+    fontSize: 12,
+    fontWeight: 'bold',
+    lineHeight: 16
+  },
   card: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
+    borderRadius: 14,
     padding: 16,
     marginBottom: 16,
-    elevation: 2
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 5
   },
   cardHeaderRow: {
     flexDirection: 'row',
@@ -795,6 +1124,11 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: 'bold',
     color: '#0F294A'
+  },
+  directoryCountText: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2
   },
   statusBadge: {
     paddingHorizontal: 8,
@@ -809,38 +1143,39 @@ const styles = StyleSheet.create({
   largeMetricRow: {
     flexDirection: 'row',
     justifyContent: 'space-around',
+    paddingVertical: 12,
     backgroundColor: '#F8FAFC',
-    padding: 16,
-    borderRadius: 10
+    borderRadius: 10,
+    marginTop: 4
   },
   metricSubTitle: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#64748B',
     marginBottom: 2
   },
   hugeMetric: {
-    fontSize: 28,
-    fontWeight: 'bold',
+    fontSize: 32,
+    fontWeight: '900',
     color: '#0F294A'
   },
   metricHelper: {
     fontSize: 11,
     color: '#10B981',
-    marginTop: 2
+    fontWeight: '600'
   },
   bodyText: {
-    fontSize: 13,
-    color: '#475569',
+    fontSize: 12,
+    color: '#64748B',
     lineHeight: 18,
     marginBottom: 12
   },
-  sensorGrid: {
+  sensorRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    gap: 10,
     marginBottom: 12
   },
   sensorBox: {
-    width: (width - 56) / 2,
+    flex: 1,
     backgroundColor: '#F8FAFC',
     padding: 12,
     borderRadius: 8,
@@ -848,126 +1183,105 @@ const styles = StyleSheet.create({
     borderColor: '#E2E8F0'
   },
   sensorLabel: {
-    fontSize: 11,
+    fontSize: 10,
     color: '#64748B',
     marginBottom: 4
   },
-  sensorVal: {
-    fontSize: 18,
+  sensorValue: {
+    fontSize: 16,
     fontWeight: 'bold',
     color: '#0F294A'
   },
-  sensorStatus: {
-    fontSize: 10,
-    color: '#10B981',
-    marginTop: 2
-  },
-  infoRow: {
+  discrepancyBox: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9'
+    alignItems: 'center',
+    backgroundColor: '#F1F5F9',
+    padding: 10,
+    borderRadius: 8,
+    marginBottom: 10
   },
-  infoLabel: {
+  discrepancyLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#334155'
+  },
+  discrepancyValue: {
+    fontSize: 12,
+    fontWeight: 'bold'
+  },
+  metricRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 4
+  },
+  metricLabel: {
     fontSize: 12,
     color: '#64748B'
   },
-  infoValue: {
+  metricValueText: {
     fontSize: 12,
     fontWeight: '600',
     color: '#0F294A'
   },
-  healthyBadge: {
-    backgroundColor: '#ECFDF5',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#10B981'
-  },
-  healthyBadgeText: {
-    color: '#059669',
-    fontSize: 10,
-    fontWeight: 'bold'
-  },
-  progressBarTrack: {
-    width: '100%',
-    height: 8,
-    backgroundColor: '#E2E8F0',
-    borderRadius: 4,
-    overflow: 'hidden',
-    marginBottom: 6
-  },
-  progressBarFill: {
-    height: '100%',
-    borderRadius: 4
-  },
-  thresholdRow: {
+  envGrid: {
     flexDirection: 'row',
     justifyContent: 'space-between'
   },
-  thresholdLabel: {
+  envItem: {
+    flex: 1,
+    alignItems: 'center'
+  },
+  envLabel: {
     fontSize: 10,
-    color: '#94A3B8'
-  },
-  overrideBanner: {
-    padding: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
-    marginBottom: 16
-  },
-  overrideBannerTitle: {
-    fontSize: 13,
-    fontWeight: 'bold',
+    color: '#64748B',
+    textAlign: 'center',
     marginBottom: 2
   },
-  overrideBannerDesc: {
-    fontSize: 11,
-    color: '#475569',
-    lineHeight: 15
+  envValue: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#0F294A'
   },
-  angleDisplayBox: {
+  currentPositionBox: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 16
+    backgroundColor: '#EFF6FF',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 14
   },
-  angleSub: {
-    fontSize: 12,
-    color: '#64748B'
+  currentPositionLabel: {
+    fontSize: 13,
+    color: '#1E40AF',
+    fontWeight: '600'
   },
-  angleNumber: {
-    fontSize: 42,
+  currentPositionValue: {
+    fontSize: 16,
     fontWeight: 'bold',
     color: '#1E3A8A'
   },
-  anglePct: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#10B981'
-  },
-  presetLabel: {
+  controlSectionHeader: {
     fontSize: 12,
-    fontWeight: '600',
-    color: '#475569',
+    fontWeight: 'bold',
+    color: '#334155',
     marginBottom: 8
   },
   presetRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 8,
     marginBottom: 16
   },
   presetBtn: {
     flex: 1,
-    backgroundColor: '#F8FAFC',
+    minWidth: (width - 70) / 2,
+    paddingVertical: 10,
+    backgroundColor: '#F1F5F9',
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: '#CBD5E1',
-    paddingVertical: 10,
-    marginHorizontal: 3,
-    borderRadius: 8,
     alignItems: 'center'
   },
   presetBtnActive: {
@@ -975,45 +1289,87 @@ const styles = StyleSheet.create({
     borderColor: '#1E3A8A'
   },
   presetBtnText: {
-    fontSize: 11,
-    fontWeight: '600',
+    fontSize: 12,
+    fontWeight: 'bold',
     color: '#334155'
   },
   presetBtnTextActive: {
     color: '#FFFFFF'
   },
-  overrideExecuteButton: {
-    backgroundColor: '#DC2626',
+  sliderLabel: {
+    fontSize: 12,
+    color: '#64748B',
+    marginBottom: 8,
+    textAlign: 'center'
+  },
+  stepperRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 16,
+    marginBottom: 16
+  },
+  stepperBtn: {
+    backgroundColor: '#E2E8F0',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8
+  },
+  stepperBtnText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#0F294A'
+  },
+  angleDisplayBox: {
+    backgroundColor: '#0F294A',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8
+  },
+  angleDisplayText: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#FFFFFF'
+  },
+  applyBtn: {
+    backgroundColor: '#D97706',
     paddingVertical: 14,
     borderRadius: 8,
     alignItems: 'center',
     marginBottom: 8
   },
-  overrideExecuteText: {
+  applyBtnText: {
     color: '#FFFFFF',
-    fontWeight: 'bold',
-    fontSize: 13
+    fontSize: 14,
+    fontWeight: 'bold'
   },
-  releaseButton: {
+  releaseBtn: {
     backgroundColor: '#10B981',
     paddingVertical: 12,
     borderRadius: 8,
-    alignItems: 'center'
+    alignItems: 'center',
+    marginBottom: 8
   },
-  releaseButtonText: {
+  releaseBtnText: {
     color: '#FFFFFF',
-    fontWeight: 'bold',
-    fontSize: 13
+    fontSize: 13,
+    fontWeight: 'bold'
+  },
+  miniWarning: {
+    fontSize: 11,
+    color: '#94A3B8',
+    textAlign: 'center',
+    marginTop: 4
   },
   smsStageBtn: {
-    backgroundColor: '#F8FAFC',
     borderWidth: 1.5,
     borderRadius: 10,
-    padding: 14,
-    marginBottom: 12
+    padding: 12,
+    marginBottom: 10,
+    backgroundColor: '#FFFFFF'
   },
   smsStageTitle: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: 'bold',
     marginBottom: 2
   },
@@ -1021,19 +1377,87 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#64748B'
   },
-  bulletItem: {
+  addContactBtn: {
+    backgroundColor: '#1E3A8A',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6
+  },
+  addContactBtnText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: 'bold'
+  },
+  emptyContactsBox: {
+    backgroundColor: '#F8FAFC',
+    padding: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center'
+  },
+  emptyContactsText: {
     fontSize: 12,
-    color: '#334155',
-    lineHeight: 18,
-    marginBottom: 4
+    color: '#64748B',
+    textAlign: 'center',
+    lineHeight: 18
+  },
+  contactItemCard: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 8
+  },
+  contactHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 2
+  },
+  contactName: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: '#0F294A'
+  },
+  roleBadge: {
+    backgroundColor: '#DBEAFE',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4
+  },
+  roleBadgeText: {
+    fontSize: 10,
+    color: '#1E40AF',
+    fontWeight: '600'
+  },
+  contactPhone: {
+    fontSize: 12,
+    color: '#16A34A',
+    fontWeight: '600'
+  },
+  removeContactBtn: {
+    backgroundColor: '#FEE2E2',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6
+  },
+  removeContactBtnText: {
+    color: '#DC2626',
+    fontSize: 11,
+    fontWeight: 'bold'
   },
   logItem: {
     backgroundColor: '#F8FAFC',
     padding: 12,
     borderRadius: 8,
-    borderLeftWidth: 3,
-    borderLeftColor: '#1E3A8A',
-    marginBottom: 10
+    borderLeftWidth: 4,
+    borderLeftColor: '#64748B',
+    marginBottom: 8
   },
   logHeader: {
     flexDirection: 'row',
@@ -1051,28 +1475,27 @@ const styles = StyleSheet.create({
   },
   logDetails: {
     fontSize: 11,
-    color: '#475569',
-    lineHeight: 15
+    color: '#334155',
+    lineHeight: 16
   },
   logTrigger: {
-    fontSize: 9,
+    fontSize: 10,
     color: '#64748B',
-    marginTop: 4,
-    fontStyle: 'italic'
+    marginTop: 4
   },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.6)',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 24
+    padding: 20
   },
   modalContent: {
-    width: '100%',
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
     padding: 20,
-    elevation: 5
+    width: '100%',
+    maxHeight: '80%'
   },
   modalTitle: {
     fontSize: 16,
@@ -1084,40 +1507,77 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#334155',
     lineHeight: 18,
-    marginBottom: 8
+    marginBottom: 10
+  },
+  recipientIntroText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#1E3A8A',
+    marginBottom: 6
+  },
+  modalRecipientList: {
+    maxHeight: 140,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 10,
+    marginBottom: 12
+  },
+  modalRecipientItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 6
+  },
+  modalRecipientBullet: {
+    color: '#16A34A',
+    fontWeight: 'bold',
+    fontSize: 14
+  },
+  modalRecipientName: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#0F294A'
+  },
+  modalRecipientPhone: {
+    fontSize: 11,
+    color: '#16A34A',
+    fontWeight: '600'
   },
   modalWarning: {
     fontSize: 11,
     color: '#DC2626',
-    fontWeight: '600',
-    backgroundColor: '#FEF2F2',
-    padding: 8,
-    borderRadius: 6,
-    marginBottom: 16
+    marginBottom: 16,
+    lineHeight: 16
   },
   modalBtnRow: {
     flexDirection: 'row',
-    justifyContent: 'flex-end'
+    gap: 10,
+    marginTop: 8
   },
   modalCancelBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    marginRight: 8
+    flex: 1,
+    paddingVertical: 12,
+    backgroundColor: '#F1F5F9',
+    borderRadius: 8,
+    alignItems: 'center'
   },
   modalCancelText: {
-    color: '#64748B',
     fontSize: 13,
-    fontWeight: '600'
+    fontWeight: '600',
+    color: '#64748B'
   },
   modalConfirmBtn: {
+    flex: 1,
+    paddingVertical: 12,
     backgroundColor: '#DC2626',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8
+    borderRadius: 8,
+    alignItems: 'center'
   },
   modalConfirmText: {
-    color: '#FFFFFF',
     fontSize: 13,
-    fontWeight: 'bold'
+    fontWeight: 'bold',
+    color: '#FFFFFF'
   }
 });

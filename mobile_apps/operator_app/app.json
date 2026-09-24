@@ -2,7 +2,6 @@
   "expo": {
     "name": "SDAS Dam Operator Portal",
     "slug": "fypsdas-operator",
-    "owner": "vibecodes-team",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -26,10 +25,8 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "extra": {
-      "eas": {
-        "projectId": "19143a2f-cf2e-49e0-b16b-996db83028f0"
-      }
-    }
+    "plugins": [
+      "expo-status-bar"
+    ]
   }
 }
