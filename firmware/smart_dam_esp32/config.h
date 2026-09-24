@@ -71,8 +71,9 @@
 #define SUPABASE_ANON_KEY   "sb_publishable_B3VAEM-xgoDik7RGUAnXLw_6JhQFYzO"
 #define SUPABASE_REST_PATH  "/rest/v1/sensor_readings"
 
-// ML Inference Cloud Server (Advisory Endpoint)
-#define ML_SERVER_URL       "http://192.168.1.100:8000/api/v1/predict"
+// ML Inference Cloud Server (Live on Render.com)
+#define ML_SERVER_URL       "https://fyp-sdas.onrender.com/api/v1/predict"
+#define ML_ANOMALY_URL      "https://fyp-sdas.onrender.com/api/v1/anomaly-check"
 
 // GSM Emergency Broadcast Contacts (Puttalam District Dispatch)
 #define PHONE_OPERATOR_1    "+94771234567"

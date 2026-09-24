@@ -8,7 +8,7 @@ import time
 import requests
 import numpy as np
 
-ML_API_BASE = "http://127.0.0.1:8000/api/v1"
+ML_API_BASE = "https://fyp-sdas.onrender.com/api/v1"
 
 class VirtualDamSimulator:
     def __init__(self):
