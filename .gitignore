@@ -15,6 +15,10 @@ node_modules/
 dist/
 web-build/
 *.tsbuildinfo
+android/
+ios/
+*.log
+*build_log*.txt
 
 # OS & Editors
 .DS_Store
