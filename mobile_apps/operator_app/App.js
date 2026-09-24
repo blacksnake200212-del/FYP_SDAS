@@ -11,15 +11,20 @@ import {
   Modal,
   Alert,
   Switch,
-  Dimensions
+  Dimensions,
+  ActivityIndicator
 } from 'react-native';
+import { SUPABASE_CONFIG } from './src/config/supabase';
 
 const { width } = Dimensions.get('window');
 
 export default function App() {
   // Authentication State
-  const [isAuthenticated, setIsAuthenticated] = useState(true);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [operatorId, setOperatorId] = useState('ENG-PUTTALAM-04');
+  const [email, setEmail] = useState('operator@sdas.sltc.lk');
+  const [password, setPassword] = useState('Puttalam#2026');
+  const [authLoading, setAuthLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('TELEMETRY'); // 'TELEMETRY', 'GATE_CONTROL', 'SMS_DISPATCH', 'AUDIT_LOGS'
 
   // Engineering Telemetry State
@@ -138,6 +143,73 @@ export default function App() {
     Alert.alert('Emergency SMS Sent', `Broadcasted ${smsStageSelected} alert to DMC, Police, and Community Dispatch.`);
   };
 
+  const handleSupabaseLogin = async () => {
+    if (!email || !password) {
+      Alert.alert('Missing Fields', 'Please enter both Operator Email and Password.');
+      return;
+    }
+    setAuthLoading(true);
+    try {
+      const response = await fetch(`${SUPABASE_CONFIG.PROJECT_URL}/auth/v1/token?grant_type=password`, {
+        method: 'POST',
+        headers: {
+          'apikey': SUPABASE_CONFIG.PUBLISHABLE_KEY,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ email: email.trim(), password })
+      });
+      const data = await response.json();
+      if (response.ok && data.access_token) {
+        const userDisplay = data.user?.email || 'ENG-PUTTALAM-04';
+        setOperatorId(userDisplay);
+        setAuditLogs(prev => [
+          {
+            id: Date.now().toString(),
+            time: new Date().toLocaleTimeString(),
+            action: 'SUPABASE_LOGIN',
+            details: `Cloud authenticated: ${userDisplay}`,
+            trigger: 'AUTH_SUCCESS'
+          },
+          ...prev
+        ]);
+        setIsAuthenticated(true);
+      } else {
+        const errorMsg = data.error_description || data.msg || 'Invalid credentials or user not registered in Supabase.';
+        Alert.alert(
+          'Supabase Cloud Authentication',
+          `${errorMsg}\n\nWould you like to enter in Demo Mode instead?`,
+          [
+            { text: 'Try Again' },
+            {
+              text: 'Enter Demo Mode',
+              onPress: () => {
+                setOperatorId('ENG-PUTTALAM-04 (Demo)');
+                setIsAuthenticated(true);
+              }
+            }
+          ]
+        );
+      }
+    } catch (err) {
+      Alert.alert(
+        'Offline / Demo Login',
+        'Cannot reach Supabase Cloud server right now. Proceed with Offline Demo Mode?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Enter Demo Mode',
+            onPress: () => {
+              setOperatorId('ENG-PUTTALAM-04 (Offline)');
+              setIsAuthenticated(true);
+            }
+          }
+        ]
+      );
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
   if (!isAuthenticated) {
     return (
       <SafeAreaView style={styles.loginContainer}>
@@ -145,11 +217,59 @@ export default function App() {
         <View style={styles.loginCard}>
           <Text style={styles.loginHeader}>SDAS Operator Portal</Text>
           <Text style={styles.loginSub}>Puttalam Dam Spillway Management</Text>
-          <TextInput style={styles.input} placeholder="Engineer / Operator ID" defaultValue="ENG-PUTTALAM-04" />
-          <TextInput style={styles.input} placeholder="Supabase Password" secureTextEntry defaultValue="••••••••••••" />
-          <TouchableOpacity style={styles.primaryButton} onPress={() => setIsAuthenticated(true)}>
-            <Text style={styles.primaryButtonText}>Authenticate via Supabase Auth</Text>
+
+          <Text style={styles.inputLabel}>Operator Email</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="e.g. operator@sdas.sltc.lk"
+            value={email}
+            onChangeText={setEmail}
+            autoCapitalize="none"
+            keyboardType="email-address"
+          />
+
+          <Text style={styles.inputLabel}>Supabase Password</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Password"
+            secureTextEntry
+            value={password}
+            onChangeText={setPassword}
+          />
+
+          <TouchableOpacity
+            style={styles.primaryButton}
+            onPress={handleSupabaseLogin}
+            disabled={authLoading}
+          >
+            {authLoading ? (
+              <ActivityIndicator color="#FFFFFF" size="small" />
+            ) : (
+              <Text style={styles.primaryButtonText}>Authenticate via Supabase Auth</Text>
+            )}
           </TouchableOpacity>
+
+          <View style={styles.divider}>
+            <View style={styles.dividerLine} />
+            <Text style={styles.dividerText}>OR</Text>
+            <View style={styles.dividerLine} />
+          </View>
+
+          <TouchableOpacity
+            style={styles.secondaryButton}
+            onPress={() => {
+              setOperatorId('ENG-PUTTALAM-04 (Demo)');
+              setIsAuthenticated(true);
+            }}
+          >
+            <Text style={styles.secondaryButtonText}>⚡ One-Tap Demo Bypass</Text>
+          </TouchableOpacity>
+
+          <View style={styles.credentialHintBox}>
+            <Text style={styles.hintTitle}>Demo Operator Account:</Text>
+            <Text style={styles.hintText}>Email: operator@sdas.sltc.lk</Text>
+            <Text style={styles.hintText}>Password: Puttalam#2026</Text>
+          </View>
         </View>
       </SafeAreaView>
     );
@@ -548,6 +668,59 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: 'bold',
     fontSize: 14
+  },
+  inputLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#334155',
+    marginBottom: 6
+  },
+  divider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 14
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#E2E8F0'
+  },
+  dividerText: {
+    marginHorizontal: 10,
+    fontSize: 11,
+    color: '#94A3B8',
+    fontWeight: 'bold'
+  },
+  secondaryButton: {
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center'
+  },
+  secondaryButtonText: {
+    color: '#1E293B',
+    fontWeight: 'bold',
+    fontSize: 13
+  },
+  credentialHintBox: {
+    marginTop: 16,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: 8,
+    padding: 10
+  },
+  hintTitle: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: '#1E40AF',
+    marginBottom: 2
+  },
+  hintText: {
+    fontSize: 11,
+    color: '#1E3A8A'
   },
   header: {
     backgroundColor: '#0F294A',
